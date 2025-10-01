@@ -1,5 +1,5 @@
 # Tawk.to + Confluence + Gemini Chatbot
-# Ready for Heroku deployment
+# Ready for Railway deployment
 
 import os
 import requests
@@ -18,7 +18,7 @@ app = Flask(__name__)
 
 class TawkConfluenceBot:
     def __init__(self):
-        # Load from environment variables (for Heroku)
+        # Load from environment variables
         self.confluence_url = os.getenv('CONFLUENCE_URL')
         self.confluence_email = os.getenv('CONFLUENCE_EMAIL')  
         self.confluence_token = os.getenv('CONFLUENCE_TOKEN')
@@ -29,6 +29,7 @@ class TawkConfluenceBot:
         # Initialize components
         self.confluence_session = requests.Session()
         self.gemini_client = None
+        self.confluence_base_url = None
         self.setup_confluence()
         self.setup_gemini()
         
@@ -250,41 +251,69 @@ def tawk_webhook():
     """Handle incoming webhooks from Tawk.to"""
     try:
         # Get webhook data
-        data = request.get_json()
-        logger.info(f"Received webhook: {json.dumps(data, indent=2)}")
+        data = request.get_json(force=True)
         
-        # Check if this is a customer message
-        if data.get('type') == 'chat:start':
-            # New chat started - send welcome message
+        # Log the entire payload to understand structure
+        logger.info("=" * 50)
+        logger.info("WEBHOOK RECEIVED:")
+        logger.info(json.dumps(data, indent=2))
+        logger.info("=" * 50)
+        
+        # Extract event type - Tawk.to uses 'event' not 'type'
+        event = data.get('event')
+        
+        logger.info(f"Event type: {event}")
+        
+        # Handle chat:start event
+        if event == 'chat:start':
             chat_id = data.get('chatId')
+            logger.info(f"Chat started: {chat_id}")
             
             welcome_message = ("👋 Hi! I'm your AI assistant. I can help you find information from our knowledge base. "
                              "Ask me anything!")
             
             bot.send_tawk_message(chat_id, welcome_message)
-            
-        elif data.get('type') == 'chat:message':
-            # New message received
+        
+        # Handle ticket:create event (when chat ends)
+        elif event == 'ticket:create':
+            # This might contain the transcript
+            logger.info("Ticket created (chat ended)")
+            # You can process the full conversation here if needed
+        
+        # Handle message event
+        elif event == 'chat:message':
             chat_id = data.get('chatId')
             message = data.get('message', {})
             message_text = message.get('text', '').strip()
-            sender_type = message.get('type', '')
+            sender = data.get('sender', {})
+            sender_type = sender.get('type', '')
             
-            # Only respond to visitor messages (not agent messages)
-            if sender_type == 'visitor' and message_text:
-                logger.info(f"Processing message: {message_text}")
+            logger.info(f"Message from {sender_type}: {message_text}")
+            
+            # Only respond to visitor messages (v = visitor, a = agent)
+            if sender_type == 'v' and message_text:
+                logger.info(f"Processing visitor message: {message_text}")
                 
                 # Search Confluence and generate response
                 confluence_results = bot.search_confluence(message_text)
                 response = bot.generate_response(message_text, confluence_results)
                 
                 # Send response back
-                bot.send_tawk_message(chat_id, response)
+                success = bot.send_tawk_message(chat_id, response)
+                logger.info(f"Response sent: {success}")
         
-        return jsonify({'status': 'success'})
+        else:
+            logger.info(f"Unhandled event type: {event}")
+        
+        return jsonify({'status': 'success', 'received': True}), 200
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {e}")
+        logger.error(f"Raw data: {request.data}")
+        return jsonify({'status': 'error', 'message': 'Invalid JSON'}), 400
         
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(f"Webhook error: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/test-search', methods=['POST'])
