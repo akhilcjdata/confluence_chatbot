@@ -253,54 +253,63 @@ def tawk_webhook():
         # Get webhook data
         data = request.get_json(force=True)
         
-        # Log the entire payload to understand structure
+        # Log the entire payload
         logger.info("=" * 50)
         logger.info("WEBHOOK RECEIVED:")
         logger.info(json.dumps(data, indent=2))
         logger.info("=" * 50)
         
-        # Extract event type - Tawk.to uses 'event' not 'type'
+        # Extract event type
         event = data.get('event')
         
         logger.info(f"Event type: {event}")
         
         # Handle chat:start event
         if event == 'chat:start':
-            chat_id = data.get('chatId')
+            chat_data = data.get('chat', {})
+            chat_id = chat_data.get('id')
             logger.info(f"Chat started: {chat_id}")
             
-            welcome_message = ("👋 Hi! I'm your AI assistant. I can help you find information from our knowledge base. "
+            welcome_message = ("Hi! I'm your AI assistant. I can help you find information from our knowledge base. "
                              "Ask me anything!")
             
             bot.send_tawk_message(chat_id, welcome_message)
         
-        # Handle ticket:create event (when chat ends)
-        elif event == 'ticket:create':
-            # This might contain the transcript
-            logger.info("Ticket created (chat ended)")
-            # You can process the full conversation here if needed
-        
-        # Handle message event
-        elif event == 'chat:message':
-            chat_id = data.get('chatId')
-            message = data.get('message', {})
-            message_text = message.get('text', '').strip()
-            sender = data.get('sender', {})
-            sender_type = sender.get('type', '')
+        # Handle chat:transcript_created event (New Chat Transcript)
+        elif event == 'chat:transcript_created':
+            chat_data = data.get('chat', {})
+            chat_id = chat_data.get('id')
+            messages = chat_data.get('messages', [])
             
-            logger.info(f"Message from {sender_type}: {message_text}")
+            logger.info(f"Transcript created for chat: {chat_id}")
+            logger.info(f"Total messages: {len(messages)}")
             
-            # Only respond to visitor messages (v = visitor, a = agent)
-            if sender_type == 'v' and message_text:
-                logger.info(f"Processing visitor message: {message_text}")
+            # Get the last visitor message
+            last_visitor_message = None
+            for message in reversed(messages):
+                sender = message.get('sender', {})
+                sender_type = sender.get('t', '')
+                
+                if sender_type == 'v':  # visitor message
+                    last_visitor_message = message.get('msg', '').strip()
+                    break
+            
+            if last_visitor_message:
+                logger.info(f"Processing last visitor message: {last_visitor_message}")
                 
                 # Search Confluence and generate response
-                confluence_results = bot.search_confluence(message_text)
-                response = bot.generate_response(message_text, confluence_results)
+                confluence_results = bot.search_confluence(last_visitor_message)
+                response = bot.generate_response(last_visitor_message, confluence_results)
                 
                 # Send response back
                 success = bot.send_tawk_message(chat_id, response)
                 logger.info(f"Response sent: {success}")
+            else:
+                logger.info("No visitor message found to process")
+        
+        # Handle ticket:create event
+        elif event == 'ticket:create':
+            logger.info("Ticket created (chat ended)")
         
         else:
             logger.info(f"Unhandled event type: {event}")
