@@ -1,5 +1,5 @@
 # Tawk.to + Confluence + Gemini Chatbot
-# Ready for Heroku deployment
+# Ready for Railway deployment
 
 import os
 import requests
@@ -18,7 +18,7 @@ app = Flask(__name__)
 
 class TawkConfluenceBot:
     def __init__(self):
-        # Load from environment variables (for Heroku)
+        # Load from environment variables
         self.confluence_url = os.getenv('CONFLUENCE_URL')
         self.confluence_email = os.getenv('CONFLUENCE_EMAIL')  
         self.confluence_token = os.getenv('CONFLUENCE_TOKEN')
@@ -29,6 +29,7 @@ class TawkConfluenceBot:
         # Initialize components
         self.confluence_session = requests.Session()
         self.gemini_client = None
+        self.confluence_base_url = None
         self.setup_confluence()
         self.setup_gemini()
         
@@ -250,41 +251,93 @@ def tawk_webhook():
     """Handle incoming webhooks from Tawk.to"""
     try:
         # Get webhook data
-        data = request.get_json()
-        logger.info(f"Received webhook: {json.dumps(data, indent=2)}")
+        data = request.get_json(force=True)
         
-        # Check if this is a customer message
-        if data.get('type') == 'chat:start':
-            # New chat started - send welcome message
+        # Log the entire payload
+        logger.info("=" * 50)
+        logger.info("WEBHOOK RECEIVED:")
+        logger.info(json.dumps(data, indent=2))
+        logger.info("=" * 50)
+        
+        # Extract event type
+        event = data.get('event')
+        
+        logger.info(f"Event type: {event}")
+        
+        # Handle chat:start event
+        if event == 'chat:start':
+            # For chat:start, chatId is at the root level
             chat_id = data.get('chatId')
+            message_data = data.get('message', {})
+            message_text = message_data.get('text', '').strip()
             
-            welcome_message = ("👋 Hi! I'm your AI assistant. I can help you find information from our knowledge base. "
-                             "Ask me anything!")
+            logger.info(f"Chat started: {chat_id}")
+            logger.info(f"First message: {message_text}")
             
-            bot.send_tawk_message(chat_id, welcome_message)
-            
-        elif data.get('type') == 'chat:message':
-            # New message received
-            chat_id = data.get('chatId')
-            message = data.get('message', {})
-            message_text = message.get('text', '').strip()
-            sender_type = message.get('type', '')
-            
-            # Only respond to visitor messages (not agent messages)
-            if sender_type == 'visitor' and message_text:
-                logger.info(f"Processing message: {message_text}")
+            if message_text:
+                # Process the first message
+                logger.info(f"Processing first message: {message_text}")
                 
                 # Search Confluence and generate response
                 confluence_results = bot.search_confluence(message_text)
                 response = bot.generate_response(message_text, confluence_results)
                 
                 # Send response back
-                bot.send_tawk_message(chat_id, response)
+                success = bot.send_tawk_message(chat_id, response)
+                logger.info(f"Response sent: {success}")
+            else:
+                # Send welcome message if no text in first message
+                welcome_message = "Hi! I'm your AI assistant. I can help you find information from our knowledge base. Ask me anything!"
+                bot.send_tawk_message(chat_id, welcome_message)
         
-        return jsonify({'status': 'success'})
+        # Handle chat:transcript_created event (New Chat Transcript)
+        elif event == 'chat:transcript_created':
+            chat_data = data.get('chat', {})
+            chat_id = chat_data.get('id')
+            messages = chat_data.get('messages', [])
+            
+            logger.info(f"Transcript created for chat: {chat_id}")
+            logger.info(f"Total messages: {len(messages)}")
+            
+            # Get the last visitor message
+            last_visitor_message = None
+            for message in reversed(messages):
+                sender = message.get('sender', {})
+                sender_type = sender.get('t', '')
+                
+                if sender_type == 'v':  # visitor message
+                    last_visitor_message = message.get('msg', '').strip()
+                    break
+            
+            if last_visitor_message:
+                logger.info(f"Processing last visitor message: {last_visitor_message}")
+                
+                # Search Confluence and generate response
+                confluence_results = bot.search_confluence(last_visitor_message)
+                response = bot.generate_response(last_visitor_message, confluence_results)
+                
+                # Send response back
+                success = bot.send_tawk_message(chat_id, response)
+                logger.info(f"Response sent: {success}")
+            else:
+                logger.info("No visitor message found to process")
+        
+        # Handle ticket:create event
+        elif event == 'ticket:create':
+            logger.info("Ticket created (chat ended)")
+        
+        else:
+            logger.info(f"Unhandled event type: {event}")
+        
+        return jsonify({'status': 'success', 'received': True}), 200
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {e}")
+        logger.error(f"Raw data: {request.data}")
+        return jsonify({'status': 'error', 'message': 'Invalid JSON'}), 400
         
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(f"Webhook error: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/test-search', methods=['POST'])
