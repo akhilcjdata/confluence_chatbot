@@ -251,90 +251,38 @@ def tawk_webhook():
     """Handle incoming webhooks from Tawk.to"""
     try:
         # Get webhook data
-        data = request.get_json(force=True)
+        data = request.get_json()
+        logger.info(f"Received webhook: {json.dumps(data, indent=2)}")
         
-        # Log the entire payload
-        logger.info("=" * 50)
-        logger.info("WEBHOOK RECEIVED:")
-        logger.info(json.dumps(data, indent=2))
-        logger.info("=" * 50)
-        
-        # Extract event type
-        event = data.get('event')
-        
-        logger.info(f"Event type: {event}")
-        
-        # Handle chat:start event
-        if event == 'chat:start':
-            # For chat:start, chatId is at the root level
+        # Check if this is a customer message
+        if data.get('type') == 'chat:start':
+            # New chat started - send welcome message
             chat_id = data.get('chatId')
-            message_data = data.get('message', {})
-            message_text = message_data.get('text', '').strip()
             
-            logger.info(f"Chat started: {chat_id}")
-            logger.info(f"First message: {message_text}")
+            welcome_message = ("👋 Hi! I'm your AI assistant. I can help you find information from our knowledge base. "
+                             "Ask me anything!")
             
-            if message_text:
-                # Process the first message
-                logger.info(f"Processing first message: {message_text}")
-                
-                # Search Confluence and generate response
-                confluence_results = bot.search_confluence(message_text)
-                response = bot.generate_response(message_text, confluence_results)
-                
-                # Send response back
-                success = bot.send_tawk_message(chat_id, response)
-                logger.info(f"Response sent: {success}")
-            else:
-                # Send welcome message if no text in first message
-                welcome_message = "Hi! I'm your AI assistant. I can help you find information from our knowledge base. Ask me anything!"
-                bot.send_tawk_message(chat_id, welcome_message)
-        
-        # Handle chat:transcript_created event (New Chat Transcript)
-        elif event == 'chat:transcript_created':
-            chat_data = data.get('chat', {})
-            chat_id = chat_data.get('id')
-            messages = chat_data.get('messages', [])
+            bot.send_tawk_message(chat_id, welcome_message)
             
-            logger.info(f"Transcript created for chat: {chat_id}")
-            logger.info(f"Total messages: {len(messages)}")
+        elif data.get('type') == 'chat:message':
+            # New message received
+            chat_id = data.get('chatId')
+            message = data.get('message', {})
+            message_text = message.get('text', '').strip()
+            sender_type = message.get('type', '')
             
-            # Get the last visitor message
-            last_visitor_message = None
-            for message in reversed(messages):
-                sender = message.get('sender', {})
-                sender_type = sender.get('t', '')
-                
-                if sender_type == 'v':  # visitor message
-                    last_visitor_message = message.get('msg', '').strip()
-                    break
-            
-            if last_visitor_message:
-                logger.info(f"Processing last visitor message: {last_visitor_message}")
+            # Only respond to visitor messages (not agent messages)
+            if sender_type == 'visitor' and message_text:
+                logger.info(f"Processing message: {message_text}")
                 
                 # Search Confluence and generate response
                 confluence_results = bot.search_confluence(last_visitor_message)
                 response = bot.generate_response(last_visitor_message, confluence_results)
                 
                 # Send response back
-                success = bot.send_tawk_message(chat_id, response)
-                logger.info(f"Response sent: {success}")
-            else:
-                logger.info("No visitor message found to process")
+                bot.send_tawk_message(chat_id, response)
         
-        # Handle ticket:create event
-        elif event == 'ticket:create':
-            logger.info("Ticket created (chat ended)")
-        
-        else:
-            logger.info(f"Unhandled event type: {event}")
-        
-        return jsonify({'status': 'success', 'received': True}), 200
-        
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error: {e}")
-        logger.error(f"Raw data: {request.data}")
-        return jsonify({'status': 'error', 'message': 'Invalid JSON'}), 400
+        return jsonify({'status': 'success'})
         
     except Exception as e:
         logger.error(f"Webhook error: {e}", exc_info=True)
